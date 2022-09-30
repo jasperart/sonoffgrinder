@@ -3,15 +3,19 @@
 #include <ESP8266mDNS.h>
 #include <ESP8266WebServer.h>
 #include <WiFiUdp.h>
-#include <ArduinoOTA.h>
 #include <EEPROM.h>
 #include <TTBOUNCE.h>
-#include <SSD1306Brzo.h>
+
+#include <Wire.h>
+#include "SSD1306Wire.h"
+// #include <brzo_i2c.h>
+// #include "SSD1306Brzo.h"
+
+#include "KY040rotary.h"
 
 // Defines
 #define VERSION "v1.0"
-#define NAME "SonoffGrinder"
-#define SONOFFBASIC // Use Sonoff Basic default Pins
+#define NAME "WemosGrinder"
 
 #define ON LOW    // LOW is LED ON
 #define OFF HIGH  // HIGH is LED OFF
@@ -22,22 +26,25 @@ const char* cPASSWORD = "coffeecoffee";
 
 const bool bFlipDisplay = true;
 
-#ifdef SONOFFBASIC
-const int pGRINDER = 12; // Relay Pin of Sonoff
-const int pLED = 13; // LED Pin of Sonoff
-const int pBUTTON = 14; // GPIO14, last Pin on Header
+// Buttons
+const int GRINDER_PIN = D3; // Relay Pin of Wemos
+const int LED_PIN = LED_BUILTIN; // LED Pin of Wemos
+const int BUTTON_PIN = D4; // Signal In of grinder button
+const int ROTARY_CLK_PIN = D5;
+const int ROTARY_DT_PIN = D6;
+const int ROTARY_SW_PIN = D7;
 
-const int pSCL = 1; // Tx Pin on Sonoff
-const int pSDA = 3; // Rx Pin on Sonoff
-#else // Custom or Development Board
-const int pGRINDER = 12; // Relay Pin of Sonoff
-const int pLED = 16; // LED Pin of Sonoff
-const int pBUTTON = 0; // GPIO14, last Pin on Header
+// Rotary setting
+int rotaryMode = 0; // 0: inactive, 1: change single, 2: change double
+const int tRotaryChange = 100;
 
-const int pSCL = 5; // Tx Pin on Sonoff
-const int pSDA = 2; // Rx Pin on Sonoff
-#endif
+// Display
+const int I2C_DISPLAY_ADDRESS = 0x3c;
+const int SDC_PIN = D1; // SCL Pin on Wemos
+const int SDA_PIN = D2; // SDA Pin on Wemos
+const OLEDDISPLAY_GEOMETRY gGeometry = GEOMETRY_64_48;  // would default to GEOMETRY_128_64
 
+// Init Grind Settings
 const unsigned long tMAX = 60000; // Maxmimum Time for grinding
 const unsigned long tOVERLAY = 60000; // show additional information for this period
 const unsigned long tDEBOUNCE = 50; // Debounce Time for Button
@@ -62,54 +69,58 @@ unsigned long tGrindStart = 0;
 os_timer_t timerGRINDER;
 
 ESP8266WebServer server (80);
-TTBOUNCE button = TTBOUNCE(pBUTTON);
-SSD1306Brzo  display(0x3c, pSDA, pSCL); // ADDRESS, SDA, SCL
+TTBOUNCE button = TTBOUNCE(BUTTON_PIN);
+KY040 Rotary(ROTARY_CLK_PIN, ROTARY_DT_PIN, ROTARY_SW_PIN);  // Clk, DT, SW
+
+// SSD1306Brzo display(I2C_DISPLAY_ADDRESS, SDA_PIN, SDC_PIN, gGeometry); // ADDRESS, SDA, SCL
+SSD1306Wire display(I2C_DISPLAY_ADDRESS, SDA_PIN, SDC_PIN, gGeometry); // ADDRESS, SDA, SCL
+
 
 void click() {
-  if (digitalRead(pGRINDER) == LOW) {
-    digitalWrite(pGRINDER, HIGH);  // turn Relais ON
+  if (digitalRead(GRINDER_PIN) == LOW) {
+    digitalWrite(GRINDER_PIN, HIGH);  // turn Relais ON
     os_timer_arm(&timerGRINDER, tSingleShot, false);
     bClick = true;
     tGrindPeriod = tSingleShot;
     tGrindStart = millis();
     //Serial.println("Clicked");
     //Serial.println("Relais " + String(tSingleShot, DEC) + " ms ON");
-    digitalWrite(pLED, ON);
+    digitalWrite(LED_PIN, ON);
   } else {
-    digitalWrite(pGRINDER, LOW);
+    digitalWrite(GRINDER_PIN, LOW);
     os_timer_disarm(&timerGRINDER);
     bClick = false;
     bDoubleClick = false;
     //Serial.println("Abort!");
     //Serial.println("Relais OFF");
-    digitalWrite(pLED, OFF);
+    digitalWrite(LED_PIN, OFF);
   }
 }
 
 void doubleClick() {
-  if (digitalRead(pGRINDER) == LOW) {
-    digitalWrite(pGRINDER, HIGH);  // turn Relais ON
+  if (digitalRead(GRINDER_PIN) == LOW) {
+    digitalWrite(GRINDER_PIN, HIGH);  // turn Relais ON
     os_timer_arm(&timerGRINDER, tDualShot, false);
     bDoubleClick = true;
     tGrindPeriod = tDualShot;
     tGrindStart = millis();
     //Serial.println("DoubleClicked");
     //Serial.println("Relais " + String(tDualShot, DEC) + " ms ON");
-    digitalWrite(pLED, ON);
+    digitalWrite(LED_PIN, ON);
   } else {
-    digitalWrite(pGRINDER, LOW);
+    digitalWrite(GRINDER_PIN, LOW);
     os_timer_disarm(&timerGRINDER);
     bClick = false;
     bDoubleClick = false;
     //Serial.println("Abort!");
     //Serial.println("Relais OFF");
-    digitalWrite(pLED, OFF);
+    digitalWrite(LED_PIN, OFF);
   }
 }
 
 void press() {
-  if(digitalRead(pGRINDER) == LOW || (bClick == true || bDoubleClick == true)) {
-    digitalWrite(pGRINDER, HIGH);  // turn Relais ON
+  if(digitalRead(GRINDER_PIN) == LOW || (bClick == true || bDoubleClick == true)) {
+    digitalWrite(GRINDER_PIN, HIGH);  // turn Relais ON
     bPress = true;
     tGrindPeriod = tMAX;
     if (bClick == false && bDoubleClick == false) {
@@ -120,23 +131,23 @@ void press() {
     }
     //Serial.println("Pressed");
     //Serial.println("Relais ON");
-    digitalWrite(pLED, ON);
+    digitalWrite(LED_PIN, ON);
   } else {
-    digitalWrite(pGRINDER, LOW);
+    digitalWrite(GRINDER_PIN, LOW);
     os_timer_disarm(&timerGRINDER);
     bPress = false;
     //Serial.println("Abort!");
     //Serial.println("Relais OFF");
-    digitalWrite(pLED, OFF);
+    digitalWrite(LED_PIN, OFF);
   }
 }
 
 void timerCallback(void *pArg) {
   // start of timerCallback
-  digitalWrite(pGRINDER, LOW);
+  digitalWrite(GRINDER_PIN, LOW);
   //Serial.println("Timer expired");
   //Serial.println("Relais OFF");
-  digitalWrite(pLED, OFF);
+  digitalWrite(LED_PIN, OFF);
   os_timer_disarm(&timerGRINDER);
   bClick = false;
   bDoubleClick = false;
@@ -160,6 +171,13 @@ int eeGetInt(int pos) {
   *(p + 2)  = EEPROM.read(pos + 2);
   *(p + 3)  = EEPROM.read(pos + 3);
   return val;
+}
+
+void saveSingleShot(){
+  eeWriteInt(0, tSingleShot);
+}
+void saveDoubleShot(){
+  eeWriteInt(4, tDualShot);
 }
 
 void handleRoot() {
@@ -201,15 +219,17 @@ void handleRoot() {
 void handleSave() {
   // saving times via web
   if (server.arg("ss")!= "") {
-    //Serial.println("Singleshot: " + server.arg("ss"));
     tSingleShot = server.arg("ss").toInt();
-    eeWriteInt(0, server.arg("ss").toInt());
+    saveSingleShot();
+    //Serial.println("Singleshot: " + tSingleShot);
   }
   if (server.arg("ds")!= "") {
-    //Serial.println("Doubleshot: " + server.arg("ds"));
     tDualShot = server.arg("ds").toInt();
-    eeWriteInt(4, server.arg("ds").toInt());
+    saveDoubleShot();
+    //Serial.println("Doubleshot: " + tDualShot);
   }
+  // send http success
+  server.send ( 200, "text/plain", "Time updated. Reload page to see changes.");
 }
 
 void handleWifi() {
@@ -257,14 +277,14 @@ void handleDisplay() {
     display.setTextAlignment(TEXT_ALIGN_LEFT);
     display.setFont(ArialMT_Plain_10);
     if(bClick == true) {
-      display.drawString(0, 0, "Single Shot Grinding");
+      display.drawString(0, 0, "SINGLE");
     } else if (bDoubleClick == true) {
-      display.drawString(0, 0, "Double Shot Grinding");
+      display.drawString(0, 0, "DOUBLE");
     }
     display.setTextAlignment(TEXT_ALIGN_RIGHT);
-    display.setFont(ArialMT_Plain_16);
-    display.drawString(128, 16, String((millis() - tGrindStart)/1000.0,2) + "/" + String(tGrindPeriod/1000.0,2) + " s");
-    display.drawProgressBar(0, 38, 127, 10, (millis() - tGrindStart) / (tGrindPeriod / 100));
+    display.setFont(ArialMT_Plain_10);
+    display.drawString(64, 16, String((millis() - tGrindStart)/1000.0,2) + "/" + String(tGrindPeriod/1000.0,2) + " s");
+    display.drawProgressBar(0, 32, 62, 10, (millis() - tGrindStart) / (tGrindPeriod / 100));
   }
 
   if(bPress == true){
@@ -273,68 +293,114 @@ void handleDisplay() {
     display.setTextAlignment(TEXT_ALIGN_LEFT);
     display.setFont(ArialMT_Plain_10);
     if(bClick == true) {
-      display.drawString(0, 0, "Saving Single Shot Time");
+      display.drawString(0, 0, "Save Single");
     } else if (bDoubleClick == true) {
-      display.drawString(0, 0, "Saving Double Shot Time");
+      display.drawString(0, 0, "Save Double");
     } else {
-      display.drawString(0, 0, "Manual Grinding");
+      display.drawString(0, 0, "MANUAL");
     }
     display.setTextAlignment(TEXT_ALIGN_RIGHT);
-    display.setFont(ArialMT_Plain_16);
-    display.drawString(128, 16, String(millis() - tGrindStart) + " ms");
-    display.drawProgressBar(0, 38, 127, 10, (millis() - tGrindStart) / (tGrindPeriod / 100));
+    display.setFont(ArialMT_Plain_10);
+    display.drawString(64, 16, String(millis() - tGrindStart) + " ms");
+    display.drawProgressBar(0, 32, 62, 10, (millis() - tGrindStart) / (tGrindPeriod / 100));
   }
 
   if(bClick == false && bDoubleClick == false && bPress == false){
-    // default Screen
+    // default Screen  
     if(millis() > tOVERLAY) { 
       bShowOverlay = false; // disable Overlay
     } else {
       bShowOverlay = true; // reenable Overlay
     }
     display.setTextAlignment(TEXT_ALIGN_RIGHT);
-    display.setFont(ArialMT_Plain_16);
-    display.drawString(128, 16, "Single " + String(tSingleShot/1000.0,2) + " s");
-    display.drawString(128, 34, "Double " + String(tDualShot/1000.0,2) + " s");
+    if( rotaryMode == 1 ){display.setFont(ArialMT_Plain_16);}
+    else { display.setFont(ArialMT_Plain_10); }
+    display.drawString(64, 16, "Single " + String(tSingleShot/1000.0,1) + " s"); // TODO: HIGHLIGHT IF IN CHANGE MODE BY ROTARY KNOB ( rotaryMode = 1 )
+    if( rotaryMode == 2 ){display.setFont(ArialMT_Plain_16);}
+    else{ display.setFont(ArialMT_Plain_10); }
+    display.drawString(64, 34, "Double " + String(tDualShot/1000.0,1) + " s");   // TODO: HIGHLIGHT IF IN CHANGE MODE BY ROTARY KNOB ( rotaryMode = 2 )
   }
   
-  if(bShowOverlay == true) {
-    // display additional Information in Overlay
-    display.setTextAlignment(TEXT_ALIGN_LEFT);
-    display.setFont(ArialMT_Plain_10);
-    display.drawString(0, 0, NAME);
-    display.setTextAlignment(TEXT_ALIGN_RIGHT);
-    display.setFont(ArialMT_Plain_10);
-    display.drawString(128, 0, VERSION);
+  // if(bShowOverlay == true) {
+  //   // display additional Information in Overlay
+  //   display.setTextAlignment(TEXT_ALIGN_LEFT);
+  //   display.setFont(ArialMT_Plain_10);
+  //   display.drawString(0, 0, NAME);
+  //   display.setTextAlignment(TEXT_ALIGN_RIGHT);
+  //   display.setFont(ArialMT_Plain_10);
+  //   display.drawString(128, 0, VERSION);
 
-    if (bWifiConnected == true) {
-      // show IP when connected
-      display.setTextAlignment(TEXT_ALIGN_RIGHT);
-      display.setFont(ArialMT_Plain_10);
-      display.drawString(128, 54, WiFi.localIP().toString());
-    }
-  }
+  //   if (bWifiConnected == true) {
+  //     // show IP when connected
+  //     display.setTextAlignment(TEXT_ALIGN_RIGHT);
+  //     display.setFont(ArialMT_Plain_10);
+  //     display.drawString(128, 54, WiFi.localIP().toString());
+  //   }
+  // }
 
-  if (bWifiConnected == false) {
-      // show SSID when not connected
-      display.setTextAlignment(TEXT_ALIGN_RIGHT);
-      display.setFont(ArialMT_Plain_10);
-      display.drawString(128, 54, cSSID);
-    }
+  // if (bWifiConnected == false) {
+  //     // show SSID when not connected
+  //     display.setTextAlignment(TEXT_ALIGN_RIGHT);
+  //     display.setFont(ArialMT_Plain_10);
+  //     display.drawString(128, 54, cSSID);
+  //   }
 
   display.display();
+}
+
+
+void OnButtonClicked(void) {
+  // Serial.println("Rotary button clicked.");
+  rotaryMode +=1;
+  if( rotaryMode > 2){
+    // Serial.println("Storing times to EEPROM.");
+    rotaryMode = 0;
+    saveSingleShot();
+    saveDoubleShot();
+  }
+}
+void OnButtonLeft(void) {
+  // Serial.println("Rotary knob turned left. Decrease time.");
+  // decrease time
+  if( rotaryMode == 1 ) { 
+    tSingleShot -= tRotaryChange;
+  } else if( rotaryMode == 2 ) {
+    tDualShot -= tRotaryChange;
+  }  
+}
+void OnButtonRight(void) {
+  // Serial.println("Rotary knob turned right. Increase time.");
+  // increase time
+  if( rotaryMode == 1 ) { 
+    tSingleShot += tRotaryChange;
+  } else if( rotaryMode == 2 ) {
+    tDualShot += tRotaryChange;
+  }  
+}
+
+void initRotary() {
+  // init button
+  if ( !Rotary.Begin() ) {
+    Serial.println("unable to init rotate button");
+    while (1);
+  }
+  // init button callbacks
+  Rotary.OnButtonClicked(OnButtonClicked);
+  Rotary.OnButtonLeft(OnButtonLeft);
+  Rotary.OnButtonRight(OnButtonRight);
+  Serial.println("KY-040 rotary encoder OK");
 }
 
 // *******SETUP*******
 void setup() {
   //Serial.begin(115200); // Start serial
 
-  pinMode(pGRINDER, OUTPUT);      // define Grinder output Pin
-  digitalWrite(pGRINDER, LOW);    // turn Relais OFF
-  pinMode(pLED, OUTPUT);
-  digitalWrite(pLED, ON);         // turn LED ON at start
+  pinMode(GRINDER_PIN, OUTPUT);      // define Grinder output Pin
+  // digitalWrite(GRINDER_PIN, LOW);    // turn Relais OFF
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, ON);         // turn LED ON at start
 
-  pinMode(pBUTTON, INPUT_PULLUP);        // Bugfix ttbounce button.enablePullup(); not working
+  pinMode(BUTTON_PIN, INPUT_PULLUP);        // Bugfix ttbounce button.enablePullup(); not working
 
   handleWifi();
 
@@ -356,95 +422,20 @@ void setup() {
   button.attachDoubleClick(doubleClick);          // attach the double Click Method to the double Click Event
   button.attachPress(press);                      // attach the Press Method to the Press Event
 
+  initRotary();
+
   EEPROM.begin(8);  // Initialize EEPROM
   tSingleShot = eeGetInt(0);
   tDualShot = eeGetInt(4);
 
-//======OTA PART=========================================================
-  // Port defaults to 8266
-  // ArduinoOTA.setPort(8266);
-
-  // Hostname defaults to esp8266-[ChipID]
-  // ArduinoOTA.setHostname("myesp8266");
-
-  // No authentication by default
-  // ArduinoOTA.setPassword("admin");
-
-  // Password can be set with it's md5 value as well
-  // MD5(admin) = 21232f297a57a5a743894a0e4a801fc3
-  // ArduinoOTA.setPasswordHash("21232f297a57a5a743894a0e4a801fc3");
-
-  ArduinoOTA.onStart([]() {
-    String type;
-    if (ArduinoOTA.getCommand() == U_FLASH) {
-      type = "sketch";
-    } else { // U_FS
-      type = "filesystem";
-    }
-    // NOTE: if updating FS this would be the place to unmount FS using FS.end()
-    //Serial.println("Start updating " + type);
-    digitalWrite(pLED, ON);
-    os_timer_arm(&timerGRINDER, 0, false); // instantly fire Timer
-  });
-  ArduinoOTA.onEnd([]() {
-    //Serial.println("\nEnd");
-    display.clear();
-    display.setTextAlignment(TEXT_ALIGN_CENTER);
-    display.setFont(ArialMT_Plain_16);
-    display.drawString(64, 10, "OTA Finsihed");
-    display.drawProgressBar(0, 32, 127, 10, 100);
-    display.drawString(64, 45, "rebooting..");
-    display.display();
-    // eeWriteInt(0, 1000); // for testing
-    // eeWriteInt(4, 2000); // for testing
-  });
-  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-    //Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
-    display.clear();
-    display.setTextAlignment(TEXT_ALIGN_CENTER);
-    display.setFont(ArialMT_Plain_16);
-    display.drawString(64, 10, "OTA Update");
-    display.drawProgressBar(0, 32, 127, 10, progress / (total / 100));
-    display.drawString(64, 45, String(progress / (total / 100)) + " %");
-    display.display();
-  });
-  ArduinoOTA.onError([](ota_error_t error) {
-    //Serial.printf("Error[%u]: ", error);
-    display.clear();
-    display.setTextAlignment(TEXT_ALIGN_CENTER);
-    display.setFont(ArialMT_Plain_16);
-    display.drawString(64, 10, "OTA Error");
-    display.drawProgressBar(0, 32, 127, 10, 100);
-    if (error == OTA_AUTH_ERROR) {
-      //Serial.println("Auth Failed");
-      display.drawString(64, 45, "Auth Failed");
-    } else if (error == OTA_BEGIN_ERROR) {
-      //Serial.println("Begin Failed");
-      display.drawString(64, 45, "Begin Failed");
-    } else if (error == OTA_CONNECT_ERROR) {
-      //Serial.println("Connect Failed");
-      display.drawString(64, 45, "Connect Failed");
-    } else if (error == OTA_RECEIVE_ERROR) {
-      //Serial.println("Receive Failed");
-      display.drawString(64, 45, "Receive Failed");
-    } else if (error == OTA_END_ERROR) {
-      //Serial.println("End Failed");
-      display.drawString(64, 45, "End Failed");
-    }
-    display.display();
-    delay(1000);
-  });
-  ArduinoOTA.begin();
-
-  digitalWrite(pLED, OFF);        // turn LED OFF after Setup
+  digitalWrite(LED_PIN, OFF);        // turn LED OFF after Setup
 }
 
 // *******LOOP*******
 void loop() {
-  ArduinoOTA.handle();
 
   server.handleClient();
-  
+
   button.update();
 
   if(bPress == true) {
@@ -468,6 +459,7 @@ void loop() {
     }
   }
 
+  Rotary.Process( millis() );
   handleWifi();
   handleDisplay();
 }
