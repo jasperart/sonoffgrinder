@@ -173,10 +173,12 @@ int eeGetInt(int pos) {
   return val;
 }
 
-void saveSingleShot(){
+void setSingleDuration(int duration){
+  tSingleShot = duration;
   eeWriteInt(0, tSingleShot);
 }
-void saveDoubleShot(){
+void setDoubleDuration(int duration){
+  tDualShot = duration;
   eeWriteInt(4, tDualShot);
 }
 
@@ -219,13 +221,11 @@ void handleRoot() {
 void handleSave() {
   // saving times via web
   if (server.arg("ss")!= "") {
-    tSingleShot = server.arg("ss").toInt();
-    saveSingleShot();
+    setSingleDuration(server.arg("ss").toInt());
     //Serial.println("Singleshot: " + tSingleShot);
   }
   if (server.arg("ds")!= "") {
-    tDualShot = server.arg("ds").toInt();
-    saveDoubleShot();
+    setDoubleDuration(server.arg("ds").toInt());
     //Serial.println("Doubleshot: " + tDualShot);
   }
   // send http success
@@ -355,8 +355,8 @@ void OnButtonClicked(void) {
   if( rotaryMode > 2){
     // Serial.println("Storing times to EEPROM.");
     rotaryMode = 0;
-    saveSingleShot();
-    saveDoubleShot();
+    setSingleDuration(tSingleShot);
+    setDoubleDuration(tDualShot);
   }
 }
 void OnButtonLeft(void) {
@@ -445,16 +445,14 @@ void loop() {
       os_timer_arm(&timerGRINDER, 0, false); // instantly fire Timer
       bPress = false;
       if (bClick == true) {
-        eeWriteInt(0, tGrindDuration); // safe single Shot Time
-        bClick = false;
-        tSingleShot = tGrindDuration;
-        //Serial.println("Single Shot set to " + String(tGrindDuration, DEC) + " ms");
+        setSingleDuration(tGrindDuration); // safe single Shot Time
+        bClick = false;        
+        //Serial.println("Single Shot set to " + String(tSingleShot, DEC) + " ms");
       }
       else if (bDoubleClick == true) {
-        eeWriteInt(4, tGrindDuration); // safe double Shot Time
-        bDoubleClick = false;
-        tDualShot = tGrindDuration;
-        //Serial.println("Double Shot set to " + String(tGrindDuration, DEC) + " ms");
+        setDoubleDuration(tGrindDuration); // safe double Shot Time
+        bDoubleClick = false;        
+        //Serial.println("Double Shot set to " + String(tDualShot, DEC) + " ms");
       }
     }
   }
