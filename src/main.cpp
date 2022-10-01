@@ -21,15 +21,15 @@
 #define OFF HIGH  // HIGH is LED OFF
 
 // Configuration
-const char* cSSID     = "coffee";
-const char* cPASSWORD = "coffeecoffee";
+const char* cSSID     = "Ponyhof";
+const char* cPASSWORD = "daslebenisteinponyhof";
 
 const bool bFlipDisplay = true;
 
 // Buttons
-const int GRINDER_PIN = D3; // Relay Pin of Wemos
+const int GRINDER_PIN = D4; // Relay Pin of Wemos
 const int LED_PIN = LED_BUILTIN; // LED Pin of Wemos
-const int BUTTON_PIN = D4; // Signal In of grinder button
+const int BUTTON_PIN = D3; // Signal In of grinder button
 const int ROTARY_CLK_PIN = D5;
 const int ROTARY_DT_PIN = D6;
 const int ROTARY_SW_PIN = D7;
@@ -99,6 +99,7 @@ void click() {
 
 void doubleClick() {
   if (digitalRead(GRINDER_PIN) == LOW) {
+    // start grinding
     digitalWrite(GRINDER_PIN, HIGH);  // turn Relais ON
     os_timer_arm(&timerGRINDER, tDualShot, false);
     bDoubleClick = true;
@@ -108,6 +109,7 @@ void doubleClick() {
     //Serial.println("Relais " + String(tDualShot, DEC) + " ms ON");
     digitalWrite(LED_PIN, ON);
   } else {
+    // stop grinding
     digitalWrite(GRINDER_PIN, LOW);
     os_timer_disarm(&timerGRINDER);
     bClick = false;
@@ -396,7 +398,7 @@ void setup() {
   //Serial.begin(115200); // Start serial
 
   pinMode(GRINDER_PIN, OUTPUT);      // define Grinder output Pin
-  // digitalWrite(GRINDER_PIN, LOW);    // turn Relais OFF
+  digitalWrite(GRINDER_PIN, LOW);    // turn Relais OFF
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, ON);         // turn LED ON at start
 
